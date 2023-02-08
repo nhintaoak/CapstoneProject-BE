@@ -11,7 +11,7 @@ namespace CapstoneProject_BE.Models
         public DbSet<User> Users { get; set; }
         public DbSet<Role> Roles { get; set; }
         public DbSet<RefreshToken> RefreshTokens { get; set; }
-        public DbSet<ForgotPasswordModel> ForgotPasswordModels { get; set; }
+        public DbSet<EmailToken> EmailTokens { get; set; }
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             modelBuilder.Entity<User>(e =>
@@ -25,6 +25,7 @@ namespace CapstoneProject_BE.Models
                 e.Property(u=>u.Password).IsRequired();
                 e.Property(u => u.RoleId).HasDefaultValue(0);
                 e.Property(u => u.UserId).UseIdentityColumn();
+                e.Property(u => u.Status).HasDefaultValue(false);
             });
             modelBuilder.Entity<Role>(e =>
             {
@@ -43,13 +44,15 @@ namespace CapstoneProject_BE.Models
                 e.Property(u => u.IsRevoked).HasDefaultValue(false);
                 e.Property(u => u.TokenId).UseIdentityColumn();
             });
-            modelBuilder.Entity<ForgotPasswordModel>(e =>
+            modelBuilder.Entity<EmailToken>(e =>
             {
-                e.ToTable("ForgotPasswordModel");
-                e.HasKey(r => r.Id);
-                e.Property(r => r.Email).IsRequired();
-                e.Property(r => r.EmailSent).IsRequired();
+                e.ToTable("EmailToken");
+                e.HasKey(r => r.TokenId);
+                e.HasOne(t=>t.User)
+                .WithMany(a=>a.EmailTokens)
+                .HasForeignKey(u => u.UserId);
                 e.Property(u => u.Token).IsRequired();
+                e.Property(u => u.TokenId).UseIdentityColumn();
             });
         }
     }

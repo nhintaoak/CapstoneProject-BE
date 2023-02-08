@@ -9,12 +9,15 @@ using Microsoft.IdentityModel.Tokens;
 using System.IdentityModel.Tokens.Jwt;
 using System.Net;
 using MimeKit;
-using MailKit.Security;
-using MailKit.Net.Smtp;
+
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using System.Security.Principal;
+using System.Text.RegularExpressions;
+using Org.BouncyCastle.Utilities;
+using System.Net.Mail;
+using CapstoneProject_BE.Constants;
 
 namespace CapstoneProject_BE.Controllers.Authentication
 {
@@ -35,7 +38,7 @@ namespace CapstoneProject_BE.Controllers.Authentication
             try
             {
                 var user = await _context.Users.SingleOrDefaultAsync(u => u.Email == model.Email);
-                if (user!=null&&HashHelper.Decrypt(user.Password,_configuration)==model.Password)
+                if (user!=null&&HashHelper.Decrypt(user.Password,_configuration)==model.Password&&user.Status)
                 {
                     return Ok(GenerateToken(user));
                 }
@@ -50,67 +53,201 @@ namespace CapstoneProject_BE.Controllers.Authentication
             }
 
         }
-
-        [HttpGet("Forgot")]
-        public async Task<IActionResult> ForgotPassword(TokenModel token)
+        [HttpPost("ResetPassword")]
+        public async Task<IActionResult> ResetPassword(string token,string newpwd)
         {
             try
             {
-                var user = await _context.ForgotPasswordModels.SingleOrDefaultAsync(u => u.Token == token.AccessToken);
-                if (user != null)
+                Regex validateGuidRegex = new Regex("^(?=.*?[A-Z])(?=.*?[0-9]).{6,32}$");
+                var emailtoken = await _context.EmailTokens.SingleOrDefaultAsync(t => t.Token == token);
+                if (emailtoken != null && !emailtoken.IsUsed && !emailtoken.IsRevoked&&validateGuidRegex.IsMatch(newpwd))
                 {
+                    var user = await _context.Users.SingleOrDefaultAsync(t => t.UserId == emailtoken.UserId);
+                    user.Password = HashHelper.Encrypt(newpwd,_configuration);
+                    emailtoken.IsUsed = true;
+                    _context.Update(emailtoken);
+                    _context.Update(user);
+                    await _context.SaveChangesAsync();
                     return Ok();
                 }
                 else
                 {
-                    return BadRequest("InvalidCredential");
+                    return BadRequest("Invalid Token");
                 }
             }
             catch
             {
                 return StatusCode(500);
             }
-        }
 
-        [HttpGet("SendPasswordResetLink/{email}")]
-        public async Task<IActionResult> SendPasswordResetLink(string email)
+
+        }
+        [HttpPost("ConfirmEmail")]
+        public async Task<IActionResult> ConfirmEmail(string token)
         {
-            var user = await _context.Users.SingleOrDefaultAsync(u => u.UserName == email);
-            if (user == null)
+            try
+            {
+                
+                var emailtoken = await _context.EmailTokens.SingleOrDefaultAsync(t => t.Token == token);
+                if (emailtoken != null && !emailtoken.IsUsed && !emailtoken.IsRevoked)
+                {
+                    var user = await _context.Users.SingleOrDefaultAsync(t => t.UserId == emailtoken.UserId);
+                    user.Status = true;
+                    emailtoken.IsUsed = true;
+                    _context.Update(emailtoken);
+                    _context.Update(user);
+                    await _context.SaveChangesAsync();
+                    return Ok();
+                }
+                else
+                {
+                    return BadRequest("Invalid Token");
+                }
+            }
+            catch
             {
                 return StatusCode(500);
             }
-            string token = GenerateAccessToken(user);
-            ForgotPasswordModel forgotPasswordModel = new ForgotPasswordModel();
-            forgotPasswordModel.Email = email;
-            forgotPasswordModel.Token = token;
-            string resetLink = "https://localhost:7265/reset-password?token=" + token;
-            var emailToSend = new MimeMessage();
-            emailToSend.From.Add(new MailboxAddress("Sender name", "kiennthe153296@fpt.edu.vn"));
-            emailToSend.To.Add(new MailboxAddress("Receiver name", email));
-            emailToSend.Subject = "Password Reset Request";
-            emailToSend.Body = new TextPart(MimeKit.Text.TextFormat.Html) { Text = $"Dear {user.UserName},\n\n" +
-                               $"We received a request to reset the password for your account. If you made this request, please follow the link below to reset your password:\n\n" +
-                               $"{resetLink}\n\n" +
-                               "If you did not make this request, you can safely ignore this email. Your password will not be reset without clicking on the link above.\n\n" +
-                               "Thank you,\n" +
-                               "IMSD System."
-            };
-            using (var emailClient = new SmtpClient())
+
+
+        }
+        [HttpPost("RevokeToken")]
+        public async Task<IActionResult> RevokeToken(string token)
+        {
+            try
             {
-                emailClient.Connect("smtp.gmail.com", 587, SecureSocketOptions.StartTls);
-                emailClient.Authenticate("kiennthe153296@fpt.edu.vn", "02112001Kien");
-                emailClient.Send(emailToSend);
-                emailClient.Disconnect(true);
+
+                var emailtoken = await _context.EmailTokens.SingleOrDefaultAsync(t => t.Token == token);
+                if (emailtoken != null)
+                {                   
+                    emailtoken.IsRevoked=true;
+                    _context.Update(emailtoken);
+                    await _context.SaveChangesAsync();
+                    return Ok();
+                }
+                else
+                {
+                    return BadRequest("Invalid Token");
+                }
             }
-            forgotPasswordModel.EmailSent = true;
-            await _context.SaveChangesAsync();
-            return Ok(forgotPasswordModel);
+            catch
+            {
+                return StatusCode(500);
+            }
+
+
+        }
+        [HttpPost("ResetPasswordByEmail")]
+        public async Task<IActionResult> ResetPasswordByEmail(string email)
+        {
+            try
+            {
+                var user = await _context.Users.SingleOrDefaultAsync(u => u.Email == email);
+                if (user != null)
+                {
+                    var token = GenerateRandomToken();
+                    MailMessage mm = new MailMessage("nguyendailam04@gmail.com", email);
+                    mm.Subject = "Reset your password";
+                    mm.Body = "<a href='" + Constant.ClientUrl + "/" + token + "'> Reset Password </a>" + "<br>" +
+                        "<a href='" + Constant.ClientUrl + "/" + token + "'> Not you ? </a>" + "<br>" +
+                        "This link will be expired in 1 day";
+                    mm.IsBodyHtml = true;
+                    SmtpClient smtp = new SmtpClient();
+                    smtp.Host = "smtp.gmail.com";
+                    smtp.EnableSsl = true;
+                    NetworkCredential NetworkCred = new NetworkCredential();
+                    NetworkCred.UserName = "nguyendailam04@gmail.com";
+                    NetworkCred.Password = "tbsnoshajsenptbd";
+                    smtp.UseDefaultCredentials = false;
+                    smtp.Credentials = NetworkCred;
+                    smtp.Port = 587;
+                    smtp.Send(mm);
+                    var emailtoken = new EmailToken {
+                        Token = token,
+                        IssuedAt = DateTime.UtcNow,
+                        ExpiredAt = DateTime.UtcNow.AddDays(1),
+                        IsRevoked=false,
+                        IsUsed=false,
+                        UserId=user.UserId
+                    };
+                    _context.Add(emailtoken);
+                    await _context.SaveChangesAsync();
+                    return Ok();
+                }
+                else
+                {
+                    return BadRequest("Invalid Email");
+                }
+            }
+            catch
+            {
+                return StatusCode(500);
+            }
+
+        }
+
+        [HttpPost("SignUp")]
+        public async Task<IActionResult> SignUp(SignUpModel model)
+        {
+            try
+            {
+                Regex validateGuidRegex = new Regex("^(?=.*?[A-Z])(?=.*?[0-9]).{6,32}$");
+                var user = await _context.Users.SingleOrDefaultAsync(u => u.Email == model.Email);
+                if (user == null&&validateGuidRegex.IsMatch(model.Password))
+                {
+                    var token = GenerateRandomToken();
+                    MailMessage mm = new MailMessage("nguyendailam04@gmail.com", model.Email);
+                    mm.Subject = "Confirm your email";
+                    mm.Body = "<a href='"+Constant.ClientUrl + "/" + token+"'> Confirm email </a>"+"<br>" +
+                        "<a href='" + Constant.ClientUrl + "/" + token + "'> Not you ? </a>" + "<br>" +
+                        "This link will be expired in 1 day";
+                    mm.IsBodyHtml = true;
+                    SmtpClient smtp = new SmtpClient();
+                    smtp.Host = "smtp.gmail.com";
+                    smtp.EnableSsl = true;
+                    NetworkCredential NetworkCred = new NetworkCredential();
+                    NetworkCred.UserName = "nguyendailam04@gmail.com";
+                    NetworkCred.Password = "tbsnoshajsenptbd";
+                    smtp.UseDefaultCredentials = false;
+                    smtp.Credentials = NetworkCred;
+                    smtp.Port = 587;
+                    smtp.Send(mm);
+                    var newuser = new User
+                    {
+                        Email = model.Email,
+                        Password = model.Password,
+                        RoleId = 1
+                    };
+                    _context.Users.Add(newuser);
+                    await _context.SaveChangesAsync();
+                    var emailtoken = new EmailToken
+                    {
+                        Token = token,
+                        IssuedAt = DateTime.UtcNow,
+                        ExpiredAt = DateTime.UtcNow.AddDays(1),
+                        IsRevoked = false,
+                        IsUsed = false,
+                        UserId=newuser.UserId
+                    };
+                    _context.Add(emailtoken);
+                    await _context.SaveChangesAsync();
+                    return Ok();
+                }
+                else
+                {
+                    return BadRequest("This Email is already existed");
+                }
+            }
+            catch
+            {
+                return StatusCode(500);
+            }
+
         }
 
 
 
-        private string GenerateRefreshToken()
+        private string GenerateRandomToken()
         {
             var random = new Byte[32];
             using (var rng = RandomNumberGenerator.Create())
@@ -122,7 +259,7 @@ namespace CapstoneProject_BE.Controllers.Authentication
         private TokenModel GenerateToken(User user)
         {
             var access = GenerateAccessToken(user);
-            var refresh = GenerateRefreshToken();
+            var refresh = GenerateRandomToken();
             var tokenhandler = new JwtSecurityTokenHandler();
             var refreshEntity = new RefreshToken
             {

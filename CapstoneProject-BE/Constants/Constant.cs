@@ -2,8 +2,8 @@
 
 namespace CapstoneProject_BE.Constants
 {
-    public class Constant
+    public static class Constant
     {
-        public static readonly int Constant0 = 1;
+        public static readonly string ClientUrl="";
     }
 }
